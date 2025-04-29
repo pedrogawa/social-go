@@ -1,24 +1,31 @@
 package main
 
 import (
-	"log"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"go.uber.org/zap"
+
+	"github.com/pedrogawa/social-go/docs"
 	"github.com/pedrogawa/social-go/internal/store"
+
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 type application struct {
 	config config
 	store  store.Storage
+	logger *zap.SugaredLogger
 }
 
 type config struct {
-	addr string
-	db   dbConfig
-	env  string
+	addr   string
+	db     dbConfig
+	env    string
+	apiURL string
 }
 
 type dbConfig struct {
@@ -40,6 +47,13 @@ func (app *application) mount() http.Handler {
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Get("/health", app.healthCheckHandler)
+
+		docsURL := fmt.Sprintf("%s/swagger/doc.json", app.config.addr)
+		r.Get("/swagger/*", httpSwagger.Handler(httpSwagger.URL(docsURL)))
+
+		r.Get("/test-swagger-doc", func(w http.ResponseWriter, r *http.Request) {
+			http.ServeFile(w, r, "./docs/swagger.json")
+		})
 
 		r.Route("/posts", func(r chi.Router) {
 			r.Post("/", app.createPostHandler)
@@ -70,6 +84,10 @@ func (app *application) mount() http.Handler {
 			r.Group(func(r chi.Router) {
 				r.Get("/feed", app.getUserFeedHandler)
 			})
+
+			r.Route("/authentication", func(r chi.Router) {
+				r.Post("/user", app.registerUserHandler)
+			})
 		})
 	})
 
@@ -77,6 +95,10 @@ func (app *application) mount() http.Handler {
 }
 
 func (app *application) run(mux http.Handler) error {
+	docs.SwaggerInfo.Version = version
+	docs.SwaggerInfo.Host = app.config.apiURL
+	docs.SwaggerInfo.BasePath = "/v1"
+
 	srv := &http.Server{
 		Addr:         app.config.addr,
 		Handler:      mux,
@@ -85,7 +107,7 @@ func (app *application) run(mux http.Handler) error {
 		IdleTimeout:  time.Minute,
 	}
 
-	log.Printf("Server has started at %s", app.config.addr)
+	app.logger.Infow("Server has started", "addr", app.config.addr, "env", app.config.env)
 
 	return srv.ListenAndServe()
 }
